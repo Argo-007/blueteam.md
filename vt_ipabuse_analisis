@@ -1,0 +1,201 @@
+import requests                                  # Peticiones HTTP
+import time                                      # Para pausas y timestamps
+import re                                        # Validación de datos
+import csv                                       # Generar CSV
+from concurrent.futures import ThreadPoolExecutor, as_completed  # Paralelismo
+
+# ==============================
+# CONFIGURACIÓN
+# ==============================
+
+VT_API_KEY = "b31bf0d86c8fcb8f8ac531d26929a1c907de7acfea90e6a33b25f2b84b579118"
+ABUSE_API_KEY = "472a5a1db967d27278d501c93ad1083116646a19bbaf518c2471e9b52ebb8341a3d734bb9d26aa0a"
+
+VT_IP_URL = "https://www.virustotal.com/api/v3/ip_addresses/"
+VT_DOMAIN_URL = "https://www.virustotal.com/api/v3/domains/"
+VT_URL_URL = "https://www.virustotal.com/api/v3/urls"
+
+vt_headers = {
+    "x-apikey": VT_API_KEY
+}
+
+# ==============================
+# VALIDADORES
+# ==============================
+
+
+def es_ip(valor):
+    return re.match(r"^\d{1,3}(\.\d{1,3}){3}$", valor)
+
+
+def es_url(valor):
+    return valor.startswith("http")
+
+
+def es_dominio(valor):
+    return re.match(r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$", valor)
+
+# ==============================
+# CONSULTAS VIRUSTOTAL
+# ==============================
+
+
+def consultar_vt_ip(ip):
+    r = requests.get(VT_IP_URL + ip, headers=vt_headers)
+    if r.status_code == 200:
+        return r.json()["data"]["attributes"]["last_analysis_stats"]
+    return None
+
+
+def consultar_vt_dominio(dom):
+    r = requests.get(VT_DOMAIN_URL + dom, headers=vt_headers)
+    if r.status_code == 200:
+        return r.json()["data"]["attributes"]["last_analysis_stats"]
+    return None
+
+
+def consultar_vt_url(url):
+    payload = {"url": url}
+    r = requests.post(VT_URL_URL, headers=vt_headers, data=payload)
+
+    if r.status_code in [200, 202]:
+        return {"malicious": 0, "suspicious": 0}
+
+    return None
+
+# ==============================
+# CONSULTA ABUSEIPDB (solo IP)
+# ==============================
+
+
+def consultar_abuse(ip):
+    headers = {
+        "Key": ABUSE_API_KEY,
+        "Accept": "application/json"
+    }
+
+    params = {
+        "ipAddress": ip,
+        "maxAgeInDays": 90
+    }
+
+    r = requests.get(
+        "https://api.abuseipdb.com/api/v2/check",
+        headers=headers,
+        params=params
+    )
+
+    if r.status_code == 200:
+        return r.json()["data"]["abuseConfidenceScore"]
+
+    return 0
+
+# ==============================
+# EVALUACIÓN COMBINADA
+# ==============================
+
+
+def evaluar(vt, abuse_score):
+    vt_flag = vt and vt.get("malicious", 0) > 0
+    abuse_flag = abuse_score > 0
+
+    if vt_flag and abuse_flag:
+        return "MALICIOSO"
+    elif vt_flag or abuse_flag:
+        return "SOSPECHOSO"
+    else:
+        return "LIMPIO"
+
+# ==============================
+# PROCESAMIENTO
+# ==============================
+
+
+def procesar_item(item):
+    item = item.strip()
+
+    tipo = "UNKNOWN"
+    vt = None
+    abuse_score = 0
+
+    if es_ip(item):
+        tipo = "IP"
+        vt = consultar_vt_ip(item)
+        abuse_score = consultar_abuse(item)
+
+    elif es_url(item):
+        tipo = "URL"
+        vt = consultar_vt_url(item)
+
+    elif es_dominio(item):
+        tipo = "DOMINIO"
+        vt = consultar_vt_dominio(item)
+
+    else:
+        return None
+
+    evaluacion = evaluar(vt, abuse_score)
+
+    return {
+        "valor": item,
+        "tipo": tipo,
+        "malicious": vt.get("malicious", 0) if vt else "N/A",
+        "suspicious": vt.get("suspicious", 0) if vt else "N/A",
+        "abuse_score": abuse_score,
+        "evaluacion": evaluacion
+    }
+
+# ==============================
+# GUARDAR CSV (CORREGIDO)
+# ==============================
+
+
+def guardar_csv(datos):
+    if not datos:
+        print("No hay datos para guardar")
+        return
+
+    # 🔥 Nombre dinámico (evita PermissionError)
+    nombre = time.strftime("resultados_%Y-%m-%d_%H-%M-%S.csv")
+
+    with open(nombre, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=datos[0].keys())
+        writer.writeheader()
+        writer.writerows(datos)
+
+    print(f"\nArchivo generado: {nombre}")
+
+# ==============================
+# MAIN
+# ==============================
+
+
+def main():
+    with open("ips.txt") as f:
+        items = f.readlines()
+
+    resultados = []
+
+    # Paralelismo controlado
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(procesar_item, i) for i in items]
+
+        for future in as_completed(futures):
+            result = future.result()
+
+            if result:
+                print(result)
+                resultados.append(result)
+
+                time.sleep(15)  # Evita rate limit
+
+    # 🔥 LLAMADA CORRECTA (ANTES estaba mal)
+    guardar_csv(resultados)
+
+# ==============================
+# ENTRY POINT
+# ==============================
+
+
+if __name__ == "__main__":
+    main()
