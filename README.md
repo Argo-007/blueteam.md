@@ -18,3 +18,5 @@ El resultado es mostrado en Consola y generado en un csv que contiene los result
 imagen del documento CSV
 <img width="646" height="410" alt="image" src="https://github.com/user-attachments/assets/5e24b397-1874-4e8a-aae7-e8402b743467" />
 
+Esta herramienta continua en desarrollo para poder realizar un mejor analisis y cruce de informacion con otras posibles 
+fuentes que ayude a generar analisis de forma mas rapida y automatizada 
